@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 from time import sleep
+import sys
 
 load_dotenv()
 discord_id = os.getenv('discord_id')
@@ -245,7 +246,9 @@ def update_data():
     db.insert_current_prices([item.to_dict() for item in wiki.prices])
     db.insert_current_details([item.to_dict() for item in ge.details])
 
-if __name__ == "__main__":
+if __name__ == "__main__":    
+    print("Starting script...", flush=True)
+    sys.stdout.flush()
     while True:
         update_data()
         print(f"Data updated at {datetime.now()}")
