@@ -5,6 +5,9 @@ import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 
+load_dotenv()
+discord_id = os.getenv('discord_id')
+
 class ItemPrices:
     def __init__(self, id):
         self.id = id
@@ -58,8 +61,8 @@ class OsrsWiki:
     def get_data(self):
         url = "https://prices.runescape.wiki/api/v1/osrs/latest"
         headers = {
-        'User-Agent': 'DeathsCofferTool v1.0 DiscId 154928689119756288'
-    }
+            'User-Agent': f'GrandExchangeLocalDataSync v1.0 DiscId {discord_id}'
+        }
         try:
             response = requests.get(url, headers=headers)
             response.raise_for_status()  # Raise an error for bad responses
