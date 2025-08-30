@@ -4,6 +4,7 @@ from sqlalchemy import create_engine, text
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
+from time import sleep
 
 load_dotenv()
 discord_id = os.getenv('discord_id')
@@ -245,4 +246,7 @@ def update_data():
     db.insert_current_details([item.to_dict() for item in ge.details])
 
 if __name__ == "__main__":
-    update_data()
+    while True:
+        update_data()
+        sleep(300)
+        print(f"Data updated at {datetime.now()}")
