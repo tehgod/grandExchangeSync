@@ -1,5 +1,5 @@
 #!/bin/bash
 git pull
-docker stop grand_exchange_sync
-docker container rm grand_exchange_sync
+docker stop grand-exchange-sync
+docker container rm grand-exchange-sync
 docker compose up -d
