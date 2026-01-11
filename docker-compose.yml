@@ -1,0 +1,10 @@
+version: "3"
+services:
+  grand-exchange-sync:
+    container_name: grand-exchange-sync
+    build:
+      context: .
+      no_cache: true
+    restart: no
+    env_file:
+      - .env
