@@ -1,12 +1,10 @@
 import requests
 import os
 from sqlalchemy import create_engine, text
-import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 from time import sleep
 from urllib.parse import quote_plus
-import sys
 
 load_dotenv()
 discord_id = os.getenv('discord_id')
