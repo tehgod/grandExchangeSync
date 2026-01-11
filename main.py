@@ -5,33 +5,60 @@ import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 from time import sleep
+from urllib.parse import quote_plus
 import sys
 
 load_dotenv()
 discord_id = os.getenv('discord_id')
 
-class ItemPrices:
-    def __init__(self, id):
-        self.id = id
-        self.highPrice = None
-        self.highPriceTime = None
-        self.lowPrice = None
-        self.lowPriceTime = None
+class DatabaseConnection:
+    def __init__(self, database_name):
+        self.database_name = database_name
+        db_username = os.getenv('db_username')
+        db_password = os.getenv('db_password')
+        db_hostname = os.getenv('db_hostname')
+        connection_string = f"mssql+pyodbc://{db_username}:{quote_plus(db_password)}@{db_hostname}/Runescape?driver=ODBC Driver 17 for SQL Server"
+        # Create engine once with connection pool settings
+        self.engine = create_engine(
+            connection_string,
+            pool_size=5,          # Keep 5 connections in the pool
+            max_overflow=10,      # Allow up to 10 extra connections
+            pool_pre_ping=True,   # Verify connections before using
+            pool_recycle=3600,    # Recycle connections after 1 hour
+            fast_executemany=True # Enable fast batch inserts for pyodbc
+        )
+    
+    def close(self):
+        self.engine.dispose()
+
+    def df_to_db(self, df, table_name):
+        #merge into database on Id as primary matching column, replacing values with new values
+        df.set_index('Id', inplace=True)
+        df.to_sql(table_name, con=self.engine, if_exists='replace', index=True)
+        return True
+
+class ItemPrice:
+    def __init__(self, itemId):
+        self.itemId = itemId
+        self.inGameHighPrice = None
+        self.inGameHighPriceTimestamp = None
+        self.inGameLowPrice = None
+        self.inGameLowPriceTimestamp = None
         self.gePrice = None
         self.previousGePrice = None
             
     def to_dict(self):
         return {
-            'id': self.id,
-            'highPrice': self.highPrice,
-            'highPriceTime': self.highPriceTime,
-            'lowPrice': self.lowPrice,
-            'lowPriceTime': self.lowPriceTime,
+            'itemId': self.itemId,
+            'inGameHighPrice': self.inGameHighPrice,
+            'inGameHighPriceTimestamp': self.inGameHighPriceTimestamp,
+            'inGameLowPrice': self.inGameLowPrice,
+            'inGameLowPriceTimestamp': self.inGameLowPriceTimestamp,
             'gePrice': self.gePrice,
             'previousGePrice': self.previousGePrice
         }
 
-class ItemInfo:
+class ItemDetail:
     def __init__(self):
         self.id = id
         self.name = None
@@ -41,7 +68,7 @@ class ItemInfo:
         self.lowalch = None
         self.highalch = None
         self.buylimit = None
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -53,11 +80,65 @@ class ItemInfo:
             'highalch': self.highalch,
             'buylimit': self.buylimit
         }
+
+class PricesApiItem:
+    def __init__(self, itemId, itemInfo):
+        self.itemId = itemId
+        self.inGameHighPrice = itemInfo.get('high')
+        highTime = itemInfo.get('highTime')
+        self.inGameHighPriceTimestamp = (datetime.fromtimestamp(highTime) 
+                                         if highTime and isinstance(highTime, (int, float)) 
+                                         else None)
+        self.inGameLowPrice = itemInfo.get('low')
+        lowTime = itemInfo.get('lowTime')
+        self.inGameLowPriceTimestamp = (datetime.fromtimestamp(lowTime) 
+                                       if lowTime and isinstance(lowTime, (int, float)) 
+                                       else None)
     
-#ingame prices
+    def to_dict(self):
+        return {
+            'itemId': self.itemId,
+            'inGameHighPrice': self.inGameHighPrice,
+            'inGameHighPriceTimestamp': self.inGameHighPriceTimestamp,
+            'inGameLowPrice': self.inGameLowPrice,
+            'inGameLowPriceTimestamp': self.inGameLowPriceTimestamp
+        }
+
+class WierdGloopItem:
+    def __init__(self, itemId, itemData):
+        self.itemId = itemId
+        self.examine = itemData.get('examine')
+        self.members = itemData.get('members')
+        self.lowAlch = itemData.get('lowalch')
+        self.highAlch = itemData.get('highalch')
+        self.buyLimit = itemData.get('limit')
+        self.name = itemData.get('name')
+        self.previousGePrice = itemData.get('last')
+        self.gePrice = itemData.get('price')
+        self.volume = itemData.get('volume')
+    
+    def to_dict_details(self):
+        return {
+            'itemId': self.itemId,
+            'name': self.name,
+            'examine': self.examine,
+            'members': self.members,
+            'volume': self.volume,
+            'lowalch': self.lowAlch,
+            'highalch': self.highAlch,
+            'buylimit': self.buyLimit
+        }
+    
+    def to_dict_prices(self):
+        return {
+            'itemId': self.itemId,
+            'gePrice': self.gePrice,
+            'previousGePrice': self.previousGePrice
+        }
+
 class OsrsWiki:
     def __init__(self):
-        self.prices = []
+        self.items: list[PricesApiItem] = []
         self.get_data()
 
     def get_data(self):
@@ -65,191 +146,186 @@ class OsrsWiki:
         headers = {
             'User-Agent': f'GrandExchangeLocalDataSync v1.0 DiscId {discord_id}'
         }
-        try:
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()  # Raise an error for bad responses
-            data = response.json()['data']
-            prices = []
-            for item_id in data:
-                item = ItemPrices(int(item_id))
-                item_stats = data[item_id]
-                item.highPrice = item_stats['high']
-                item.highPriceTime = datetime.fromtimestamp(item_stats['highTime']) if isinstance(item_stats
-                    ['highTime'], (int, float)) else item_stats['highTime']
-                item.lowPrice = item_stats['low']
-                item.lowPriceTime = datetime.fromtimestamp(item_stats['lowTime']) if isinstance(item_stats
-                    ['lowTime'], (int, float)) else item_stats['lowTime']
-                prices.append(item)
-            self.prices = prices
-            return prices
-        except requests.exceptions.RequestException as e:
-            print(f"An error occurred: {e}")
-            return None
+        
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()['data']
+        items = []
+        for item_id in data:
+            item = PricesApiItem(int(item_id), data[item_id])
+            items.append(item)
+        self.items = items
+        return items
 
-#current prices
+    def sync_data(self, db_conn: DatabaseConnection):
+        query ="""MERGE INTO [GrandExchange].[ItemPrice] AS [p1]
+                    USING
+                    (
+                        SELECT :itemId AS [ItemId],
+                            :inGameHighPrice AS [InGameHighPrice],
+                            :inGameHighPriceTimestamp AS [InGameHighPriceTimestamp],
+                            :inGameLowPrice AS [InGameLowPrice],
+                            :inGameLowPriceTimestamp AS [InGameLowPriceTimestamp]
+                    ) AS [p2]
+                    ON [p1].[ItemId] = [p2].[ItemId]
+                    WHEN MATCHED AND (
+                                        [p1].[InGameHighPrice] <> [p2].[InGameHighPrice]
+                                        OR ISNULL([p1].[InGameHighPriceTimestamp], CAST('2026-01-01 12:30:00' AS DATETIME2)) <> ISNULL(
+                                                                                                                                        [p2].[InGameHighPriceTimestamp],
+                                                                                                                                        CAST('2026-01-01 12:30:00' AS DATETIME2)
+                                                                                                                                    )
+                                        OR [p1].[InGameLowPrice] <> [p2].[InGameLowPrice]
+                                        OR ISNULL([p1].[InGameLowPriceTimestamp], CAST('2026-01-01 12:30:00' AS DATETIME2)) <> ISNULL(
+                                                                                                                                        [p2].[InGameLowPriceTimestamp],
+                                                                                                                                        CAST('2026-01-01 12:30:00' AS DATETIME2)
+                                                                                                                                    )
+                                    ) THEN
+                        UPDATE SET [p1].[InGameHighPrice] = [p2].[InGameHighPrice],
+                                [p1].[InGameHighPriceTimestamp] = [p2].[InGameHighPriceTimestamp],
+                                [p1].[InGameLowPrice] = [p2].[InGameLowPrice],
+                                [p1].[InGameLowPriceTimestamp] = [p2].[InGameLowPriceTimestamp]
+                    WHEN NOT MATCHED THEN
+                        INSERT
+                        (
+                            [ItemId],
+                            [InGameHighPrice],
+                            [InGameHighPriceTimestamp],
+                            [InGameLowPrice],
+                            [InGameLowPriceTimestamp]
+                        )
+                        VALUES
+                        ([p2].[ItemId], [p2].[InGameHighPrice], [p2].[InGameHighPriceTimestamp], [p2].[InGameLowPrice],
+                        [p2].[InGameLowPriceTimestamp]);"""
+
+        values = []
+        for item in self.items:
+            values.append(item.to_dict())
+
+        with db_conn.engine.connect() as connection:
+            connection.execute(text(query), values)
+            connection.commit()
+
+        return True
+
 class GrandExchange:
     def __init__(self):
-        self.prices = []
+        self.items: list[WierdGloopItem] = []
         self.get_data()
 
     def get_data(self):
         url = "https://chisel.weirdgloop.org/gazproj/gazbot/os_dump.json"
-        try:
-            response = requests.get(url)
-            response.raise_for_status()  # Raise an error for bad responses
-            data = response.json()
-            prices = []
-            details = []
-            for item in data:
-                item_data = data[item]
-                if type(item_data) is not dict:
-                    continue
-                item_priceobj = ItemPrices(item_data['id'])
-                try:
-                    item_priceobj.gePrice = item_data['price'] 
-                except KeyError:
-                    item_priceobj.gePrice = None
-                try: 
-                    item_priceobj.previousGePrice = item_data['last']
-                except KeyError:
-                    item_priceobj.previousGePrice = None
-                prices.append(item_priceobj)
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an error for bad responses
+        data = response.json()
 
-                item_info_obj = ItemInfo()
-                item_info_obj.id = item_data['id']
-                try:
-                    item_info_obj.name = item_data['name']
-                except KeyError:
-                    item_info_obj.name = None
-                try:
-                    item_info_obj.examine = item_data['examine']
-                except KeyError:
-                    item_info_obj.examine = None
-                try:
-                    item_info_obj.members = item_data['members']
-                except KeyError:
-                    item_info_obj.members = None
-                try:
-                    item_info_obj.volume = item_data['volume']
-                except KeyError:
-                    item_info_obj.volume = None
-                try:
-                    item_info_obj.lowalch = item_data['lowalch']
-                except KeyError:
-                    item_info_obj.lowalch = None
-                try:
-                    item_info_obj.highalch = item_data['highalch']
-                except KeyError:
-                    item_info_obj.highalch = None
-                try:
-                    item_info_obj.buylimit = item_data['limit']
-                except KeyError:
-                    item_info_obj.buylimit = None
-                details.append(item_info_obj)
-            self.prices = prices
-            self.details = details
+        items = []
+        for item_id in data:
+            if not item_id.isdigit():
+                continue
+            item = WierdGloopItem(int(item_id), data[item_id])
+            items.append(item)
+        self.items = items
 
-        except requests.exceptions.RequestException as e:
-            print(f"An error occurred: {e}")
-            return None
+    def sync_data(self, db_conn: DatabaseConnection):
+        query1 =         """MERGE INTO [GrandExchange].[ItemPrice] AS [t]
+                        USING
+                        (
+                            SELECT :itemId AS [ItemId],
+                                :gePrice AS [GePrice],
+                                :previousGePrice AS [PreviousGePrice]
+                        ) AS [s]
+                        ON [s].[ItemId] = [t].[ItemId]
+                        WHEN MATCHED THEN
+                            UPDATE SET [t].[GePrice] = [s].[GePrice],
+                                    [t].[PreviousGePrice] = [s].[PreviousGePrice]
+                        WHEN NOT MATCHED THEN
+                            INSERT
+                            (
+                                [ItemId],
+                                [GePrice],
+                                [PreviousGePrice]
+                            )
+                            VALUES
+                            ([s].[ItemId], [s].[GePrice], [s].[PreviousGePrice]);"""
+        values1 = []
+        for item in self.items:
+            values1.append(item.to_dict_prices())
 
-class database_connection:
-    def __init__(self, database_name):
-        self.database_name = database_name
-        self.load_engine()
-        pass
+        query2 ="""MERGE INTO [GrandExchange].[ItemDetail] AS [t]
+                USING
+                (
+                    SELECT :itemId AS [ItemId],
+                        :name AS [Name],
+                        :examine AS [Examine],
+                        :members AS [Members],
+                        :volume AS [Volume],
+                        :lowalch AS [LowAlch],
+                        :highalch AS [HighAlch],
+                        :buylimit AS [BuyLimit]
+                ) AS [s]
+                ON [s].[ItemId] = [t].[ItemId]
+                WHEN MATCHED THEN
+                    UPDATE SET [t].[Name] = [s].[Name],
+                            [t].[Examine] = [s].[Examine],
+                            [t].[Members] = [s].[Members],
+                            [t].[Volume] = [s].[Volume],
+                            [t].[LowAlch] = [s].[LowAlch],
+                            [t].[HighAlch] = [s].[HighAlch],
+                            [t].[BuyLimit] = [s].[BuyLimit]
+                WHEN NOT MATCHED THEN
+                    INSERT
+                    (
+                        [ItemId],
+                        [Name],
+                        [Examine],
+                        [Members],
+                        [Volume],
+                        [LowAlch],
+                        [HighAlch],
+                        [BuyLimit]
+                    )
+                    VALUES
+                    ([s].[ItemId], [s].[Name], [s].[Examine], [s].[Members], [s].[Volume], [s].[LowAlch], [s].[HighAlch],
+                    [s].[BuyLimit]);"""
 
-    def load_engine (self):
-        db_username = os.getenv('db_username')
-        db_password = os.getenv('db_password')
-        db_hostname = os.getenv('db_hostname')
-        self.engine = create_engine(f"mysql+pymysql://{db_username}:{db_password}@{db_hostname}/{self.database_name}")
+        values2 = []
+        for item in self.items:
+            values2.append(item.to_dict_details())
+
+        with db_conn.engine.connect() as connection:
+            connection.execute(text(query2), values2)
+            connection.commit()
+            connection.execute(text(query1), values1)
+            connection.commit()
+            
+        
         return True
 
-    def df_to_db(self, df, table_name):
-        self.load_engine()
-        #merge into database on Id as primary matching column, replacing values with new values
-        df.set_index('Id', inplace=True)
-        df.to_sql(table_name, con=self.engine, if_exists='replace', index=True)
-        self.engine.dispose()
-        return True
-
-    @staticmethod
-    def df_to_dict(df):
-        return df.to_dict(orient='records')
+def main():
+    try:
+        osrs_wiki = OsrsWiki()
+    except Exception as e:
+        print(f"Error fetching data from OSRS Wiki: {e}")
+        return False
+    try:
+        grand_exchange = GrandExchange()
+    except Exception as e:
+        print(f"Error fetching data from Grand Exchange: {e}")
+        return False
+    try:
+        db_conn = DatabaseConnection('Runescape')
+    except Exception as e:
+        print(f"Error fetching data from Database Connection: {e}")
+        return False
     
-    def load_members(self):
-        self.load_engine()
-        df = pd.read_sql("select Username from Usernames where TrackStats=1", self.engine)
-        usernames = []
-        for entry in df.values.tolist():
-            usernames.append(entry[0])
-        self.engine.dispose()
-        return usernames
-   
-    def insert_current_prices(self, values):
-        self.load_engine()
-        query = """INSERT INTO ItemPrices (Id, InGameHighPrice, InGameHighPriceTime, InGameLowPrice, InGameLowPriceTime, GePrice, PreviousGePrice)
-            VALUES (:id, :highPrice, :highPriceTime, :lowPrice, :lowPriceTime, :gePrice, :previousGePrice)
-            ON DUPLICATE KEY UPDATE
-                InGameHighPrice = VALUES(InGameHighPrice),
-                InGameHighPriceTime = VALUES(InGameHighPriceTime),
-                InGameLowPrice = VALUES(InGameLowPrice),
-                InGameLowPriceTime = VALUES(InGameLowPriceTime),
-                GePrice = VALUES(GePrice),
-                PreviousGePrice = VALUES(PreviousGePrice)
-            """
-        
-        with self.engine.connect() as connection:
-            if isinstance(values, list):
-                for val in values:
-                    connection.execute(text(query), val)
-            else:
-                connection.execute(text(query), values)
-            connection.commit()
-        self.engine.dispose()
-        return True
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if grand_exchange.sync_data(db_conn)==True:
+        print(f"{timestamp} - Grand Exchange data synced successfully.")
 
-    def insert_current_details(self, values):
-        self.load_engine()
-        query = """INSERT INTO ItemDetails (Id, Name, Examine, Members, Volume, LowAlch, HighAlch, BuyLimit)
-            VALUES (:id, :name, :examine, :members, :volume, :lowalch, :highalch, :buylimit)
-            ON DUPLICATE KEY UPDATE
-                Name = VALUES(Name),
-                Examine = VALUES(Examine),
-                Members = VALUES(Members),
-                Volume = VALUES(Volume),
-                LowAlch = VALUES(LowAlch),
-                HighAlch = VALUES(HighAlch),
-                BuyLimit = VALUES(BuyLimit)
-            """
-        
-        with self.engine.connect() as connection:
-            connection.execute(text(query), values)
-            connection.commit()
-        self.engine.dispose()
-        return True
-load_dotenv()
-
-def update_data():
-    db = database_connection("GrandExchange")
-    wiki = OsrsWiki()
-    ge = GrandExchange()
-
-    #merge the two data sets on item id
-    for item in wiki.prices:
-        matching_items = [g for g in ge.prices if g.id == item.id]
-        if matching_items:
-            ge_item = matching_items[0]
-            item.gePrice = ge_item.gePrice
-            item.previousGePrice = ge_item.previousGePrice
-    db.insert_current_prices([item.to_dict() for item in wiki.prices])
-    db.insert_current_details([item.to_dict() for item in ge.details])
+    if osrs_wiki.sync_data(db_conn)==True: 
+        print(f"{timestamp} - OSRS Wiki data synced successfully.")
 
 if __name__ == "__main__":    
-    print("Starting script...", flush=True)
-    sys.stdout.flush()
     while True:
-        update_data()
-        print(f"Data updated at {datetime.now()}")
-        sleep(300)
+        main()
+        sleep(300)  # Sleep for 5 minutes
